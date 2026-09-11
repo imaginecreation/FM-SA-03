@@ -850,7 +850,7 @@
     var App = {
       currentUser: null,
       liffId: '2009018471-xu8wHiGX',
-      screenTag: 'SA03',
+      screenTag: 'SA01',
       gasUrl: 'https://script.google.com/macros/s/AKfycbx_M460SjYNduuCl6Hxzc0eucdZyO1pIzv0DRTbzpAZLLm-_GN0khVB4PhOjKbqFcdpgg/exec',
       _loadingTimer: null,
 
@@ -979,16 +979,20 @@
 
       verifyUserOnServer_: function(lineUid, displayName, callback) {
         var self = this;
-        var cacheKey = 'fmsa01_auth_' + lineUid;
-        var cacheTimeKey = 'fmsa01_auth_time_' + lineUid;
+        var tag = (self.screenTag || 'SA01').trim();
+        var cacheKey = 'FM_' + tag + '_AUTH_' + lineUid;
+        var cacheTimeKey = 'FM_' + tag + '_AUTH_TIME_' + lineUid;
         var AUTH_TTL = 24 * 60 * 60 * 1000; // 24 ชั่วโมง
 
         // ดึงสิทธิ์จาก localStorage/sessionStorage ก่อน เพื่อให้เปิดหน้าจอได้ทันที (Zero Wait Time < 0.05s)
         var cached = null;
         var cachedTime = 0;
         try {
-          var raw = localStorage.getItem(cacheKey) || sessionStorage.getItem(cacheKey);
-          var rawTime = localStorage.getItem(cacheTimeKey);
+          var raw = localStorage.getItem(cacheKey) || 
+                    localStorage.getItem('fmsa01_auth_' + lineUid) || 
+                    sessionStorage.getItem(cacheKey);
+          var rawTime = localStorage.getItem(cacheTimeKey) || 
+                        localStorage.getItem('fmsa01_auth_time_' + lineUid);
           if (raw) cached = JSON.parse(raw);
           if (rawTime) cachedTime = parseInt(rawTime, 10) || 0;
         } catch (e) {}
@@ -1388,9 +1392,15 @@
           localStorage.removeItem('FMSA03_LOCAL_APPROVERS');
           localStorage.removeItem('FMSA03_LOCAL_CACHE_TIME');
 
-          // เคลียร์แคชยืนยันตัวตน เพื่อบังคับเช็คสิทธิ์ใหม่
+          // เคลียร์แคชยืนยันตัวตน เพื่อบังคับเช็คสิทธิ์ใหม่ (Dynamic ตาม App.screenTag)
           if (window.App && window.App.currentUser && window.App.currentUser.line_uid) {
             var uid = window.App.currentUser.line_uid;
+            var tag = (window.App.screenTag || 'SA01').trim();
+            localStorage.removeItem('FM_' + tag + '_AUTH_' + uid);
+            localStorage.removeItem('FM_' + tag + '_AUTH_TIME_' + uid);
+            sessionStorage.removeItem('FM_' + tag + '_AUTH_' + uid);
+
+            // เคลียร์คีย์เวอร์ชันเดิม (ถ้ามี)
             localStorage.removeItem('fmsa01_auth_' + uid);
             localStorage.removeItem('fmsa01_auth_time_' + uid);
             sessionStorage.removeItem('fmsa01_auth_' + uid);

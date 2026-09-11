@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-    <title>FM-SA-03 v1.0 |ตรวจความปลอดภัยประจำวัน</title>
+  <title>FM-SA-03 v1.0 |ตรวจความปลอดภัยประจำวัน</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
@@ -739,7 +739,7 @@
   <header class="app-header">
     <div class="header-top">
       <div class="brand-title">
-        <span>🛡️ FM-SA-03</span>
+        <span>🛡️ FM-SA-01</span>
         <span class="brand-badge"
           style="font-size: 0.70rem; padding: 2px 7px; background: rgba(59, 130, 246, 0.25); border: 1px solid rgba(147, 197, 253, 0.4); color: #93C5FD; border-radius: 9999px;">v1.0</span>
       </div>
@@ -966,6 +966,7 @@
       screenTag: 'SA03',
       gasUrl: 'https://script.google.com/macros/s/AKfycbx_M460SjYNduuCl6Hxzc0eucdZyO1pIzv0DRTbzpAZLLm-_GN0khVB4PhOjKbqFcdpgg/exec',
       _loadingTimer: null,
+      _inFlightRequests: {},
 
       init: function (onReady) {
         var self = this;
@@ -973,7 +974,7 @@
 
         // ตรวจสอบ LIFF ID หากไม่มีให้ใช้ค่าเริ่มต้น
         if (!self.liffId || self.liffId.length < 5) {
-          self.liffId = '2009018471-xu8wHiGX';
+          self.liffId = '2009018471-L2UlwMA6';
         }
 
         // ตรวจสอบพารามิเตอร์ทดสอบเฉพาะสำหรับนักพัฒนา (?mock=true หรือเปิดบน localhost)
@@ -1243,7 +1244,8 @@
           body.transDate = args[1];
         } else if (action === 'getApprovalQueue') {
           body.lineUid = args[0];
-          body.monthFilter = args[1];
+          body.monthFilter = args[1] || '';
+          body.approverName = args[2] || (self.currentUser ? self.currentUser.users_name : '');
         } else if (action === 'deleteChecklist') {
           var delPayload = args[0] || {};
           if (typeof delPayload === 'object') {
@@ -1260,7 +1262,14 @@
           }
         }
 
-        return fetch(self.gasUrl, {
+        // In-flight Request Deduplication: ป้องกันการยิง request เดียวกันซ้อนกันไปติด lock บน GAS
+        var inFlightKey = (action === 'getApprovalQueue') ? ('getApprovalQueue_' + (body.lineUid || '') + '_' + (body.monthFilter || '')) : null;
+        if (inFlightKey && self._inFlightRequests && self._inFlightRequests[inFlightKey]) {
+          console.log('[App] Reusing in-flight request for ' + inFlightKey);
+          return self._inFlightRequests[inFlightKey];
+        }
+
+        var reqPromise = fetch(self.gasUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'text/plain;charset=utf-8'
@@ -1281,7 +1290,16 @@
             }
             return res.json();
           })
+          .then(function (json) {
+            if (inFlightKey && self._inFlightRequests) {
+              delete self._inFlightRequests[inFlightKey];
+            }
+            return json;
+          })
           .catch(function (err) {
+            if (inFlightKey && self._inFlightRequests) {
+              delete self._inFlightRequests[inFlightKey];
+            }
             var errMsg = (err && err.message) ? err.message : String(err);
             if (currentRetry < maxRetries && (errMsg.indexOf('Failed to fetch') !== -1 || errMsg.indexOf('NetworkError') !== -1 || errMsg.indexOf('HTTP Status 404') !== -1)) {
               console.warn('[App] Network/Proxy error (' + fnName + '), retrying (' + (currentRetry + 1) + '/' + maxRetries + ')...');
@@ -1294,6 +1312,12 @@
             console.error('[App] GAS API Call Error:', err);
             throw new Error('ไม่สามารถติดต่อเซิร์ฟเวอร์ได้: ' + errMsg);
           });
+
+        if (inFlightKey && self._inFlightRequests) {
+          self._inFlightRequests[inFlightKey] = reqPromise;
+        }
+
+        return reqPromise;
       },
 
       showLoading: function (text) {
@@ -2179,16 +2203,38 @@
       approveTagL2: '',
       selectedIds: [],
 
+      cachedQueueData: null,
+      lastLoadedMonth: '',
+
       init: function () {
         var now = new Date();
         var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
         var mInput = document.getElementById('monthFilterInput');
-        if (mInput) mInput.value = currentMonth;
+        if (mInput && !mInput.value) mInput.value = currentMonth;
         this.loadQueue();
       },
 
       onMonthChange: function () {
-        this.loadQueue();
+        this.loadQueue(true);
+      },
+
+      applyQueueData_: function (data) {
+        var self = this;
+        if (!data) return;
+        self.approvalSteps = Number(data.approvalSteps) || 2;
+        self.approveTagL1 = data.approveTagL1 || '';
+        self.approveTagL2 = data.approveTagL2 || '';
+        self.asL1 = data.asL1 || [];
+        self.asL2 = data.asL2 || [];
+        self.l2Approvers = data.l2Approvers || [];
+        if (data.questions && data.questions.length > 0) {
+          self.questions = data.questions;
+        }
+
+        self.applyApprovalStepsUI_();
+        self.updateBadges_();
+        self.renderCards_();
+        self.updateBottomBar_();
       },
 
       applyApprovalStepsUI_: function () {
@@ -2239,30 +2285,43 @@
         this.updateBottomBar_();
       },
 
-      loadQueue: function () {
+      loadQueue: function (isForceRefresh) {
         var self = this;
         if (!App.currentUser) return;
 
         var month = document.getElementById('monthFilterInput') ? document.getElementById('monthFilterInput').value : '';
-        App.showLoading('กำลังโหลดรายการรออนุมัติ...');
         self.selectedIds = [];
 
-        App.callServer('apiGetApprovalQueue', App.currentUser.line_uid, month)
+        // Fast-Path: หากมีข้อมูลแคชอยู่แล้วและเดือนตรงกัน ให้เรนเดอร์ทันที (< 0.01 วินาที)
+        var hasCache = self.cachedQueueData && (self.lastLoadedMonth === month);
+        if (hasCache) {
+          self.applyQueueData_(self.cachedQueueData);
+          if (!isForceRefresh) {
+            // อัปเดตข้อมูลสดในพื้นหลังแบบ Silent โดยไม่บล็อกหน้าจอ
+            App.callServer('apiGetApprovalQueue', App.currentUser.line_uid, month, App.currentUser.users_name)
+              .then(function (res) {
+                if (res && res.success && res.data) {
+                  self.cachedQueueData = res.data;
+                  self.lastLoadedMonth = month;
+                  self.applyQueueData_(res.data);
+                }
+              })
+              .catch(function (err) {
+                console.warn('[Approval] Background refresh warning:', err);
+              });
+            return;
+          }
+        }
+
+        App.showLoading('กำลังโหลดรายการรออนุมัติ...');
+
+        App.callServer('apiGetApprovalQueue', App.currentUser.line_uid, month, App.currentUser.users_name)
           .then(function (res) {
             App.hideLoading();
             if (res && res.success && res.data) {
-              self.approvalSteps = Number(res.data.approvalSteps) || 2;
-              self.approveTagL1 = res.data.approveTagL1 || '';
-              self.approveTagL2 = res.data.approveTagL2 || '';
-              self.asL1 = res.data.asL1 || [];
-              self.asL2 = res.data.asL2 || [];
-              self.l2Approvers = res.data.l2Approvers || [];
-              self.questions = res.data.questions || [];
-
-              self.applyApprovalStepsUI_();
-              self.updateBadges_();
-              self.renderCards_();
-              self.updateBottomBar_();
+              self.cachedQueueData = res.data;
+              self.lastLoadedMonth = month;
+              self.applyQueueData_(res.data);
             } else {
               var msg = (res && res.error) ? res.error.message : 'ไม่สามารถโหลดคิวอนุมัติได้';
               App.showToast(msg, 'error');
@@ -2424,7 +2483,7 @@
             App.hideLoading();
             if (res && res.success) {
               App.showToast('อนุมัติสมบูรณ์เรียบร้อยแล้ว (' + res.data.updatedCount + ' รายการ)', 'success');
-              self.loadQueue();
+              self.loadQueue(true);
             } else {
               var msg = (res && res.error) ? res.error.message : 'เกิดข้อผิดพลาดในการอนุมัติ';
               App.showToast(msg, 'error');
@@ -2461,7 +2520,7 @@
             self.closeModals();
             if (res && res.success) {
               App.showToast('อนุมัติระดับ 1 สำเร็จ (' + res.data.updatedCount + ' รายการ) ส่งต่อไปยัง L2 แล้ว', 'success');
-              self.loadQueue();
+              self.loadQueue(true);
             } else {
               var msg = (res && res.error) ? res.error.message : 'เกิดข้อผิดพลาดในการอนุมัติ';
               App.showToast(msg, 'error');
@@ -2488,7 +2547,7 @@
             App.hideLoading();
             if (res && res.success) {
               App.showToast('อนุมัติสมบูรณ์เรียบร้อยแล้ว (' + res.data.updatedCount + ' รายการ)', 'success');
-              self.loadQueue();
+              self.loadQueue(true);
             } else {
               var msg = (res && res.error) ? res.error.message : 'เกิดข้อผิดพลาดในการอนุมัติ';
               App.showToast(msg, 'error');
@@ -2529,7 +2588,7 @@
             self.closeModals();
             if (res && res.success) {
               App.showToast('ปฏิเสธรายการเรียบร้อยแล้ว (' + res.data.updatedCount + ' รายการ) ตีกลับให้ผู้ตรวจแก้ไข', 'warning');
-              self.loadQueue();
+              self.loadQueue(true);
             } else {
               var msg = (res && res.error) ? res.error.message : 'เกิดข้อผิดพลาดในการปฏิเสธ';
               App.showToast(msg, 'error');
@@ -2727,11 +2786,18 @@
         ChecklistModule.init();
 
         if (user && user.line_uid) {
-          // ตรวจสอบคิวอนุมัติหลังจากโหลดหน้าหลักเล็กน้อย เพื่อไม่ให้เกิด lock contention กับ apiGetChecklistForm / apiGetTransactionByDate
+          // ตรวจสอบคิวอนุมัติหลังจากโหลดหน้าหลักเล็กน้อย พร้อมเก็บผลลัพธ์เข้า ApprovalModule Cache ทันที
           setTimeout(function () {
-            App.callServer('apiGetApprovalQueue', user.line_uid)
+            var now = new Date();
+            var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+            App.callServer('apiGetApprovalQueue', user.line_uid, currentMonth, user.users_name)
               .then(function (res) {
                 if (res && res.success && res.data) {
+                  if (window.ApprovalModule) {
+                    ApprovalModule.cachedQueueData = res.data;
+                    ApprovalModule.lastLoadedMonth = currentMonth;
+                    ApprovalModule.applyQueueData_(res.data);
+                  }
                   var total = (res.data.asL1 ? res.data.asL1.length : 0) + (res.data.asL2 ? res.data.asL2.length : 0);
                   var badge = document.getElementById('approvalQueueBadge');
                   if (badge) {

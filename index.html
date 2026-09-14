@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="UTF-8">
-  <title>FM-SA-03 v1.0 |ตรวจความปลอดภัยประจำวัน</title>
+  <title>FM-SA-03 v1.1 |ความปลอดภัยประจำวัน</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
@@ -156,6 +156,16 @@
       color: var(--primary);
       font-weight: 600;
       border-bottom-color: var(--primary);
+    }
+
+    .tab-btn:disabled,
+    .tab-btn.tab-disabled {
+      opacity: 0.38;
+      cursor: not-allowed !important;
+      pointer-events: none !important;
+      background: #F8FAFC !important;
+      color: #94A3B8 !important;
+      border-bottom-color: transparent !important;
     }
 
     .badge-counter {
@@ -968,13 +978,21 @@
       _loadingTimer: null,
       _inFlightRequests: {},
 
+      /**
+       * onChecklistLoaded: จัดการหลัง Checklist โหลดเสร็จ (ไม่ดึงคิวอนุมัติเบื้องหลัง เพื่อป้องกันคำขอชนกัน)
+       */
+      onChecklistLoaded: function () {
+        // Intentionally no-op to prevent background concurrency contention.
+        // Approval queue is loaded on-demand when user opens Approval tab or accesses via ?tab=approval
+      },
+
       init: function (onReady) {
         var self = this;
         self.showLoading('กำลังเชื่อมต่อระบบ LINE...');
 
         // ตรวจสอบ LIFF ID หากไม่มีให้ใช้ค่าเริ่มต้น
         if (!self.liffId || self.liffId.length < 5) {
-          self.liffId = '2009018471-L2UlwMA6';
+          self.liffId = '2009016720-cesy3wsR';
         }
 
         // ตรวจสอบพารามิเตอร์ทดสอบเฉพาะสำหรับนักพัฒนา (?mock=true หรือเปิดบน localhost)
@@ -1187,7 +1205,7 @@
             '<div class="card" style="text-align:center; padding: 40px 20px; margin-top: 30px;">' +
             '<div style="font-size: 3rem; margin-bottom: 12px;">🚫</div>' +
             '<h2 style="color: #EF4444; margin-bottom: 10px;">การเข้าถึงถูกปฏิเสธ</h2>' +
-            '<p style="color: #64748B; font-size: 0.95rem; margin-bottom: 20px;">' + (msg || 'ท่านไม่มีสิทธิ์เข้าใช้งานระบบ SA03') + '</p>' +
+            '<p style="color: #64748B; font-size: 0.95rem; margin-bottom: 20px;">' + (msg || ('ท่านไม่มีสิทธิ์เข้าใช้งานระบบ ' + (self.screenTag || 'SA01'))) + '</p>' +
             '<button class="btn btn-secondary" onclick="location.reload()" style="max-width: 200px; margin: 0 auto;">ลองใหม่อีกครั้ง</button>' +
             '</div>';
         }
@@ -1371,11 +1389,20 @@
       currentData: null,
       answers: {},
       totalQuestionsCount: 0,
+      _initializedForDate: null, // guard: วันที่ที่โหลดล่าสุด ป้องกัน init() ซ้ำตอน switch tab
 
       init: function () {
         var today = this.getTodayString_();
         var dateInput = document.getElementById('transDateInput');
         if (dateInput) dateInput.value = today;
+
+        // ถ้าวันนี้โหลดไปแล้วและมีข้อมูลอยู่ → ไม่ต้องยิง server ซ้ำ (กรณี switch tab กลับมา)
+        if (this._initializedForDate === today && this.currentData && this.currentData.questions && this.currentData.questions.length > 0) {
+          console.log('[ChecklistModule] init() skipped — already loaded for today:', today);
+          return;
+        }
+
+        this._initializedForDate = today;
         this.loadForm(today);
       },
 
@@ -1538,30 +1565,17 @@
       clearLocalCache_: function () {
         try {
           var keys = this.getCacheKeys_();
-          localStorage.removeItem(keys.QUESTIONS);
+          // เคลียร์เฉพาะโครงการและผู้อนุมัติ (คงคำถามและ Auth ไว้เพื่อความเร็วและป้องกันการยิงเซิร์ฟเวอร์หนักเกินจำเป็น)
           localStorage.removeItem(keys.PROJECTS);
           localStorage.removeItem(keys.APPROVERS);
           localStorage.removeItem(keys.APPROVER_TAG);
           localStorage.removeItem(keys.TIME);
+
           // เคลียร์คีย์เวอร์ชันเดิม (ถ้ามี)
-          localStorage.removeItem('FMSA03_LOCAL_QUESTIONS');
+          localStorage.removeItem('CENTRAL_SITE_PROJECTS');
           localStorage.removeItem('FMSA03_LOCAL_PROJECTS');
           localStorage.removeItem('FMSA03_LOCAL_APPROVERS');
           localStorage.removeItem('FMSA03_LOCAL_CACHE_TIME');
-
-          // เคลียร์แคชยืนยันตัวตน เพื่อบังคับเช็คสิทธิ์ใหม่ (Dynamic ตาม App.screenTag)
-          if (window.App && window.App.currentUser && window.App.currentUser.line_uid) {
-            var uid = window.App.currentUser.line_uid;
-            var tag = (window.App.screenTag || 'SA01').trim();
-            localStorage.removeItem('FM_' + tag + '_AUTH_' + uid);
-            localStorage.removeItem('FM_' + tag + '_AUTH_TIME_' + uid);
-            sessionStorage.removeItem('FM_' + tag + '_AUTH_' + uid);
-
-            // เคลียร์คีย์เวอร์ชันเดิม (ถ้ามี)
-            localStorage.removeItem('fmsa01_auth_' + uid);
-            localStorage.removeItem('fmsa01_auth_time_' + uid);
-            sessionStorage.removeItem('fmsa01_auth_' + uid);
-          }
         } catch (e) {
           console.warn('[ChecklistModule] clearLocalCache_ error:', e);
         }
@@ -1569,11 +1583,29 @@
 
       forceRefreshCache: function () {
         var self = this;
+        var btn = document.getElementById('btnRefreshMasterCache');
+        if (btn && btn.disabled) return;
+        if (btn) {
+          btn.disabled = true;
+          btn.setAttribute('data-original-html', btn.innerHTML);
+          btn.innerHTML = '⏳ กำลังอัปเดต...';
+        }
+
         self.clearLocalCache_();
         App.showToast('กำลังดึงข้อมูลโครงการและผู้อนุมัติล่าสุดจากเซิร์ฟเวอร์...', 'info');
         var dateInput = document.getElementById('transDateInput');
         var targetDate = (dateInput && dateInput.value) ? dateInput.value : self.getTodayString_();
         self.loadForm(targetDate, true);
+      },
+
+      _restoreRefreshBtn: function () {
+        var btn = document.getElementById('btnRefreshMasterCache');
+        if (btn) {
+          btn.disabled = false;
+          var orig = btn.getAttribute('data-original-html');
+          if (orig) btn.innerHTML = orig;
+          else btn.innerHTML = '🔄 อัปเดตข้อมูล';
+        }
       },
 
       renderProjectDropdown_: function (projects, selectedProject, isEditable) {
@@ -1714,6 +1746,7 @@
 
         App.callServer('apiGetChecklistForm', App.currentUser.line_uid, transDate)
           .then(function (res) {
+            self._restoreRefreshBtn();
             App.hideLoading();
             if (res && res.success && res.data) {
               self.currentData = res.data;
@@ -1739,14 +1772,21 @@
               if (cached && cached.approvers && cached.approvers.length > 0) {
                 self.renderApproverDropdown_(cached.approvers);
               }
+              if (cached && cached.projects && cached.projects.length > 0) {
+                self.renderProjectDropdown_(cached.projects);
+              }
             }
           })
           .catch(function (err) {
+            self._restoreRefreshBtn();
             App.hideLoading();
             App.showToast('เกิดข้อผิดพลาดในการโหลดข้อมูล: ' + err.message, 'error');
             self.renderStatusBanner_(null, true, '');
             if (cached && cached.approvers && cached.approvers.length > 0) {
               self.renderApproverDropdown_(cached.approvers);
+            }
+            if (cached && cached.projects && cached.projects.length > 0) {
+              self.renderProjectDropdown_(cached.projects);
             }
           });
       },
@@ -2163,6 +2203,7 @@
 
         var payload = {
           lineUid: App.currentUser.line_uid,
+          userName: (App.currentUser && App.currentUser.users_name) ? App.currentUser.users_name : '',
           transDate: transDate,
           project: project,
           approveProfile1: approver1,
@@ -2638,8 +2679,8 @@
           }
           if (questions.length === 0) {
             try {
-              var tag = (window.App && window.App.screenTag) ? String(window.App.screenTag).trim() : 'SA03';
-              var qRaw = localStorage.getItem('FM_' + tag + '_LOCAL_QUESTIONS') || localStorage.getItem('FMSA03_LOCAL_QUESTIONS');
+              var tag = (window.App && window.App.screenTag) ? String(window.App.screenTag).trim() : 'SA01';
+              var qRaw = localStorage.getItem('FM_' + tag + '_LOCAL_QUESTIONS') || localStorage.getItem('FMSA01_LOCAL_QUESTIONS');
               if (qRaw) questions = JSON.parse(qRaw);
             } catch (e) { }
           }
@@ -2752,11 +2793,59 @@
 
     var Navigation = {
       currentTab: 'checklist',
+      mode: null,
 
-      switchTab: function (tab) {
-        this.currentTab = tab;
+      applyMode: function (targetMode) {
         var btnChecklist = document.getElementById('navTabChecklist');
         var btnApproval = document.getElementById('navTabApproval');
+
+        if (targetMode === 'approval') {
+          this.mode = 'approval';
+          // โหมดอนุมัติ: ปิดการใช้งานแท็บบันทึกการตรวจ
+          if (btnChecklist) {
+            btnChecklist.disabled = true;
+            btnChecklist.classList.add('tab-disabled');
+            btnChecklist.title = 'โหมดอนุมัติรายการ (ล็อกแท็บบันทึกการตรวจ)';
+            btnChecklist.innerHTML = '<span>🔒 บันทึกการตรวจ</span>';
+          }
+          if (btnApproval) {
+            btnApproval.disabled = false;
+            btnApproval.classList.remove('tab-disabled');
+            btnApproval.title = 'คิวอนุมัติ';
+            btnApproval.innerHTML = '<span>⚖️ คิวอนุมัติ</span><span id="approvalQueueBadge" class="badge-counter" style="display:none;">0</span>';
+          }
+          this.switchTab('approval');
+        } else {
+          this.mode = 'checklist';
+          // โหมดบันทึกการตรวจ: ปิดการใช้งานแท็บคิวอนุมัติ
+          if (btnApproval) {
+            btnApproval.disabled = true;
+            btnApproval.classList.add('tab-disabled');
+            btnApproval.title = 'โหมดบันทึกรายการ (ล็อกแท็บคิวอนุมัติ)';
+            btnApproval.innerHTML = '<span>🔒 คิวอนุมัติ</span><span id="approvalQueueBadge" class="badge-counter" style="display:none;">0</span>';
+          }
+          if (btnChecklist) {
+            btnChecklist.disabled = false;
+            btnChecklist.classList.remove('tab-disabled');
+            btnChecklist.title = 'บันทึกการตรวจ';
+            btnChecklist.innerHTML = '<span>📝 บันทึกการตรวจ</span>';
+          }
+          this.switchTab('checklist');
+        }
+      },
+
+      switchTab: function (tab) {
+        var btnChecklist = document.getElementById('navTabChecklist');
+        var btnApproval = document.getElementById('navTabApproval');
+        var targetBtn = (tab === 'checklist') ? btnChecklist : btnApproval;
+
+        // ป้องกันการสลับแท็บหากแท็บนั้นถูกปิดการใช้งาน
+        if (targetBtn && (targetBtn.disabled || targetBtn.classList.contains('tab-disabled'))) {
+          console.warn('[Navigation] Tab is disabled in current mode:', tab);
+          return;
+        }
+
+        this.currentTab = tab;
         var viewChecklist = document.getElementById('checklistView');
         var viewApproval = document.getElementById('approvalView');
         var barChecklist = document.getElementById('checklistBottomBar');
@@ -2776,39 +2865,53 @@
           if (viewChecklist) viewChecklist.style.display = 'none';
           if (viewApproval) viewApproval.style.display = 'block';
           if (barChecklist) barChecklist.style.display = 'none';
+          if (barApproval) barApproval.style.display = 'flex';
           ApprovalModule.init();
         }
       }
     };
 
+    function detectInitialTab() {
+      var urlParams = new URLSearchParams(window.location.search);
+      var tabFromQuery = urlParams.get('tab');
+      if (tabFromQuery) return tabFromQuery.toLowerCase();
+
+      // ตรวจสอบกรณี LINE LIFF แนบพารามิเตอร์มาใน liff.state
+      var liffState = urlParams.get('liff.state');
+      if (liffState) {
+        try {
+          var decoded = decodeURIComponent(liffState);
+          var stateQuery = decoded.indexOf('?') !== -1 ? decoded.split('?')[1] : decoded;
+          var stateParams = new URLSearchParams(stateQuery);
+          var tabFromState = stateParams.get('tab');
+          if (tabFromState) return tabFromState.toLowerCase();
+        } catch (e) { }
+      }
+
+      // ตรวจสอบ URL Hash
+      if (window.location.hash) {
+        var hashStr = window.location.hash.replace('#', '').toLowerCase();
+        if (hashStr === 'approval' || hashStr === 'checklist') return hashStr;
+        try {
+          var hashQuery = hashStr.indexOf('?') !== -1 ? hashStr.split('?')[1] : hashStr;
+          var hashParams = new URLSearchParams(hashQuery);
+          var tabFromHash = hashParams.get('tab');
+          if (tabFromHash) return tabFromHash.toLowerCase();
+        } catch (e) { }
+      }
+
+      return 'checklist';
+    }
+
     window.addEventListener('DOMContentLoaded', function () {
       App.init(function (user) {
-        ChecklistModule.init();
-
-        if (user && user.line_uid) {
-          // ตรวจสอบคิวอนุมัติหลังจากโหลดหน้าหลักเล็กน้อย พร้อมเก็บผลลัพธ์เข้า ApprovalModule Cache ทันที
-          setTimeout(function () {
-            var now = new Date();
-            var currentMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
-            App.callServer('apiGetApprovalQueue', user.line_uid, currentMonth, user.users_name)
-              .then(function (res) {
-                if (res && res.success && res.data) {
-                  if (window.ApprovalModule) {
-                    ApprovalModule.cachedQueueData = res.data;
-                    ApprovalModule.lastLoadedMonth = currentMonth;
-                    ApprovalModule.applyQueueData_(res.data);
-                  }
-                  var total = (res.data.asL1 ? res.data.asL1.length : 0) + (res.data.asL2 ? res.data.asL2.length : 0);
-                  var badge = document.getElementById('approvalQueueBadge');
-                  if (badge) {
-                    badge.textContent = total;
-                    badge.style.display = total > 0 ? 'inline-block' : 'none';
-                  }
-                }
-              }).catch(function (e) {
-                console.warn('[Badge] queue check error:', e);
-              });
-          }, 3500);
+        var initialTab = detectInitialTab();
+        if (initialTab === 'approval') {
+          console.log('[App] Starting in Approver Mode (?tab=approval)');
+          Navigation.applyMode('approval');
+        } else {
+          console.log('[App] Starting in Submitter Mode (default)');
+          Navigation.applyMode('checklist');
         }
       });
     });
